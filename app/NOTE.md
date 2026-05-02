@@ -24,3 +24,150 @@ To solve this, each WebSocket connection is now backed by:
 * Now: *"I can send messages whenever any part of the system produces one."*
 
 This architecture is foundational for Redis Pub/Sub integration, where messages will be received independently of client actions and must still be delivered reliably to connected clients.
+
+Each connection:
+
+```text
+Connection A:
+    read_loop (A)
+    write_loop (A) → listens ONLY to queue_A
+
+Connection B:
+    read_loop (B)
+    write_loop (B) → listens ONLY to queue_B
+```
+
+## Managers internal Data Structure:
+
+Inside manager:
+
+```python
+self.ws_to_queue = {
+    websocket_A: queue_A,
+    websocket_B: queue_B,
+}
+```
+
+```python
+self.active_connections = {
+    "room1": [queue_A, queue_B],
+    "room2": [queue_C],
+}
+```
+
+## REAL flow of a message from A to B:
+
+### Scenario
+
+* A and B join `room1`
+* A sends message: `"Hello"`
+
+---
+
+### Step 1 — Connections created
+
+When A connects:
+
+```python
+queue_A = asyncio.Queue()
+ws_manager.register(websocket_A, queue_A)
+```
+
+When B connects:
+
+```python
+queue_B = asyncio.Queue()
+ws_manager.register(websocket_B, queue_B)
+```
+
+---
+
+### Step 2 — Join room
+
+A joins room1:
+
+```python
+active_connections["room1"] = [queue_A]
+```
+
+B joins room1:
+
+```python
+active_connections["room1"] = [queue_A, queue_B]
+```
+
+---
+
+### Step 3 — A sends message
+
+A → `read_loop`:
+
+```python
+await ws_manager.broadcast("Hello", "room1", "A")
+```
+
+---
+
+### Step 4 — broadcast
+
+```python
+queues = [queue_A, queue_B]
+
+for q in queues:
+    await q.put({"message": "Hello", "username": "A"})
+```
+
+So now:
+
+```text
+queue_A = ["Hello"]
+queue_B = ["Hello"]
+```
+
+---
+
+### Step 5 — write loops wake up
+
+Each connection has its own write loop:
+
+### A’s write loop:
+
+```python
+msg = await queue_A.get()
+await websocket_A.send_json(msg)
+```
+
+### B’s write loop:
+
+```python
+msg = await queue_B.get()
+await websocket_B.send_json(msg)
+```
+
+---
+
+### KEY DIFFERENCE vs old system
+
+### Before:
+
+```python
+for websocket in room:
+    await websocket.send_json(...)
+```
+
+- broadcast was directly sending
+
+---
+
+### Now:
+
+```python
+for queue in room:
+    await queue.put(...)
+```
+
+- broadcast only *delivers messages to inboxes*
+
+- sending is handled elsewhere (write loop)
+
+---

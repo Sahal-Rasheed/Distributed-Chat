@@ -38,8 +38,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
             match message.type:
                 case MessageType.JOIN_ROOM:
-                    if not await ws_manager.is_joined(websocket, message.room):
-                        await ws_manager.join_room(websocket, message.room)
+                    joined = await ws_manager.join_room(websocket, message.room)
+                    if joined:
                         await queue.put(
                             {
                                 "message": f"{message.username} joined room {message.room}"
@@ -50,8 +50,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         await queue.put({"error": "Already joined room"})
 
                 case MessageType.LEAVE_ROOM:
-                    if await ws_manager.is_joined(websocket, message.room):
-                        await ws_manager.leave_room(websocket, message.room)
+                    left = await ws_manager.leave_room(websocket, message.room)
+                    if left:
                         await queue.put(
                             {"message": f"{message.username} left room {message.room}"}
                         )
@@ -60,36 +60,38 @@ async def websocket_endpoint(websocket: WebSocket):
                         await queue.put({"error": "Not in room, Please join first"})
 
                 case MessageType.CHAT_MESSAGE:
-                    if not await ws_manager.is_joined(websocket, message.room):
-                        await queue.put({"error": "Not in room, Please join first"})
-                    else:
-                        await ws_manager.broadcast(
-                            message.content, message.room, message.username
-                        )
+                    sent = await ws_manager.broadcast(
+                        websocket, message.content, message.room, message.username
+                    )
+                    if sent:
                         print(
                             f"{message.username} in {message.room}: {message.content}"
                         )
+                    else:
+                        await queue.put({"error": "Not in room, Please join first"})
 
-                # case _:
-                #     raise WebSocketException(
-                #         code=status.HTTP_400_BAD_REQUEST, reason="Invalid message type"
-                #     )
+                case _:
+                    await queue.put({"error": "Invalid message type"})
 
     async def write_loop():
         """
         Listen for messages in the queue and send them to the WebSocket.
         """
-        while True:
-            msg = await queue.get()
-            await websocket.send_json(msg)
+        try:
+            while True:
+                msg = await queue.get()
+                await websocket.send_json(msg)
+        except Exception:
+            # connection closed or cancelled
+            pass
 
     read_task = asyncio.create_task(read_loop())
     write_task = asyncio.create_task(write_loop())
 
-    # run both loops concurrently until one of them raises an exception (like WebSocketDisconnect)
+    # run both loops concurrently until one of them raises an exception (like WebSocketDisconnect) or disconnects normally
     done, pending = await asyncio.wait(
         [read_task, write_task],
-        return_when=asyncio.FIRST_EXCEPTION,
+        return_when=asyncio.FIRST_COMPLETED,
     )
 
     # on exception, .wait will return, we need to cancel the other task that is still running

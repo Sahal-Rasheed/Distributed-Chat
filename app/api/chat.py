@@ -86,12 +86,20 @@ async def websocket_endpoint(websocket: WebSocket):
     read_task = asyncio.create_task(read_loop())
     write_task = asyncio.create_task(write_loop())
 
+    # run both loops concurrently until one of them raises an exception (like WebSocketDisconnect)
     done, pending = await asyncio.wait(
         [read_task, write_task],
         return_when=asyncio.FIRST_EXCEPTION,
     )
 
+    # on exception, .wait will return, we need to cancel the other task that is still running
+    # .cancel() will send cancel signal to the task
     for task in pending:
         task.cancel()
+
+    # waits until all those tasks actually finish cancelling,
+    # this is important to ensure that all resources are cleaned up properly,
+    # we cant just rely only on .cancel() because it just sends the cancellation signal
+    await asyncio.gather(*pending, return_exceptions=True)
 
     await ws_manager.disconnect(websocket)

@@ -1,5 +1,8 @@
+from uuid import UUID
 from enum import StrEnum
-from pydantic import BaseModel
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
 
 
 class MessageType(StrEnum):
@@ -13,3 +16,16 @@ class ChatMessage(BaseModel):
     room: str
     username: str | None = None
     content: str | None = None
+
+
+class CreateChatMessage(BaseModel):
+    user_id: UUID
+    room: str
+    content: str
+    timestamp: datetime
+
+
+class ChatMessagesResponse(CreateChatMessage):
+    id: UUID
+
+    model_config = ConfigDict(from_attributes=True)

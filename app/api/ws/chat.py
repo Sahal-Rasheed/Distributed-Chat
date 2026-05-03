@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, UTC
 
 from pydantic import ValidationError
 from fastapi import (
@@ -9,15 +10,19 @@ from fastapi import (
     status,  # noqa
 )
 
-from app.utils.chat import ws_manager
-from app.schemas.chat import ChatMessage, MessageType
+from app.services.socket import ws_manager
+from app.repository.chat import chat_message_repository
+from app.api.deps import CurrentWSUserDep, DBSessionDep
+from app.schemas.chat import ChatMessage, MessageType, CreateChatMessage
 
 
-chat_router = APIRouter()
+chat_ws_router = APIRouter()
 
 
-@chat_router.websocket("/chat")
-async def websocket_endpoint(websocket: WebSocket):
+@chat_ws_router.websocket("/chat")
+async def websocket_endpoint(
+    websocket: WebSocket, db: DBSessionDep, user: CurrentWSUserDep
+):
     await websocket.accept()
 
     queue = asyncio.Queue()
@@ -64,6 +69,15 @@ async def websocket_endpoint(websocket: WebSocket):
                         websocket, message.content, message.room, message.username
                     )
                     if sent:
+                        await chat_message_repository.create(
+                            db=db,
+                            obj_in=CreateChatMessage(
+                                user_id=user.id,
+                                room=message.room,
+                                content=message.content,
+                                timestamp=datetime.now(UTC),
+                            ),
+                        )
                         print(
                             f"{message.username} in {message.room}: {message.content}"
                         )

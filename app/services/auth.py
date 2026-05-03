@@ -50,7 +50,7 @@ class AuthService:
         access_token = jwt.encode(payload, self.SECRET_KEY, algorithm=self.ALGORITHM)
         return access_token
 
-    def get_email_from_token(self, token: str) -> str | HTTPException:
+    def get_email_from_token(self, token: str) -> str:
         try:
             payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
             email = payload.get("email")

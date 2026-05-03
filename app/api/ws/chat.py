@@ -10,9 +10,10 @@ from fastapi import (
     status,  # noqa
 )
 
+from app.api.deps import CurrentWSUserDep
 from app.services.socket import ws_manager
+from app.db.async_session import session_scope
 from app.repository.chat import chat_message_repository
-from app.api.deps import CurrentWSUserDep, DBSessionDep
 from app.schemas.chat import ChatMessage, MessageType, CreateChatMessage
 
 
@@ -21,7 +22,7 @@ chat_ws_router = APIRouter()
 
 @chat_ws_router.websocket("/chat")
 async def websocket_endpoint(
-    websocket: WebSocket, db: DBSessionDep, user: CurrentWSUserDep
+    websocket: WebSocket, user: CurrentWSUserDep
 ):
     await websocket.accept()
 
@@ -69,15 +70,16 @@ async def websocket_endpoint(
                         websocket, message.content, message.room, message.username
                     )
                     if sent:
-                        await chat_message_repository.create(
-                            db=db,
-                            obj_in=CreateChatMessage(
-                                user_id=user.id,
-                                room=message.room,
-                                content=message.content,
-                                timestamp=datetime.now(UTC),
-                            ),
-                        )
+                        async with session_scope() as session:
+                            await chat_message_repository.create(
+                                db=session,
+                                obj_in=CreateChatMessage(
+                                    user_id=user.id,
+                                    room=message.room,
+                                    content=message.content,
+                                    timestamp=datetime.now(UTC),
+                                ),
+                            )
                         print(
                             f"{message.username} in {message.room}: {message.content}"
                         )

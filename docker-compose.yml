@@ -16,9 +16,23 @@ services:
     networks:
       - distributed-chat-network
 
-  app:
+  redis:
+    image: redis:7-alpine
+    container_name: distributed-chat-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - distributed-chat-network
+
+  app1:
     build: .
-    container_name: distributed-chat-app
+    container_name: distributed-chat-app-1
     volumes:
       - .:/app
       # - /app/.venv # don't override .venv since using uv
@@ -28,6 +42,27 @@ services:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - distributed-chat-network
+  
+  app2:
+    build: .
+    container_name: distributed-chat-app-2
+    volumes:
+      - .:/app
+      # - /app/.venv # don't override .venv since using uv
+    env_file:
+      - ./.env
+    ports:
+      - "8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
     networks:

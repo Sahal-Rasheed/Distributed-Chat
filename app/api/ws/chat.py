@@ -21,14 +21,23 @@ chat_ws_router = APIRouter()
 
 
 @chat_ws_router.websocket("/chat")
-async def websocket_endpoint(
-    websocket: WebSocket, user: CurrentWSUserDep
-):
+async def websocket_endpoint(websocket: WebSocket, user: CurrentWSUserDep):
     await websocket.accept()
 
     queue = asyncio.Queue()
     await ws_manager.register(websocket, queue)
 
+    async def ping_loop():
+        """
+        Send periodic pings to the client to decide to keep the connection alive or not.
+        """
+        try:
+            while True:
+                await asyncio.sleep(30)  # ping every 30 seconds
+                await websocket.send_json({"type": "ping"})
+        except (WebSocketDisconnect, WebSocketException):
+            pass
+            
     async def read_loop():
         """
         Read messages from the WebSocket & add them to the queue for processing.
@@ -101,12 +110,13 @@ async def websocket_endpoint(
             # connection closed or cancelled
             pass
 
+    ping_task = asyncio.create_task(ping_loop())
     read_task = asyncio.create_task(read_loop())
     write_task = asyncio.create_task(write_loop())
 
     # run both loops concurrently until one of them raises an exception (like WebSocketDisconnect) or disconnects normally
     done, pending = await asyncio.wait(
-        [read_task, write_task],
+        [ping_task, read_task, write_task],
         return_when=asyncio.FIRST_COMPLETED,
     )
 

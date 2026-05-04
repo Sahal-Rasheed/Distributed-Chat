@@ -1,14 +1,13 @@
-import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.core.config import settings
+from app.services.socket import ws_manager
+from app.services.redis import redis_manager
 from app.api.router import router as api_router
 from app.db.async_session import init_models, async_engine
-
-
-logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -17,12 +16,32 @@ async def lifespan(app: FastAPI):
     https://fastapi.tiangolo.com/advanced/events/
     """
     await init_models()
-    logger.info("Database models initialized")
+    print("Database models initialized")
+
+    await redis_manager.connect()
+    print("Connected to Redis")
+
+    # start the redis subscriber coroutine in the bg.
+    subscriber_task = asyncio.create_task(
+        redis_manager.subscriber_coroutine(ws_manager)
+    )
+    print("Started Redis subscriber coroutine")
 
     yield
 
     await async_engine.dispose()
-    logger.info("Database engine disposed")
+    print("Database engine disposed")
+
+    subscriber_task.cancel()
+    try:
+        await subscriber_task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        print("Redis subscriber coroutine closed")
+
+    await redis_manager.close()
+    print("Redis connections closed")
 
 
 app = FastAPI(
@@ -37,7 +56,7 @@ app = FastAPI(
 
 @app.get("/")
 async def root():
-    logger.info("Root endpoint accessed")
+    print("Root endpoint accessed")
     return {"message": "Welcome to the Distributed Chat App!"}
 
 

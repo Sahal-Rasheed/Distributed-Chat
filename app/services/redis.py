@@ -9,6 +9,8 @@ from app.core.config import settings
 if TYPE_CHECKING:
     from app.services.socket import WebSocketConnectionManager
 
+lock = asyncio.Lock()
+
 
 class RedisPubSubManager:
     def __init__(self):
@@ -37,21 +39,25 @@ class RedisPubSubManager:
         """
         Subscribe to a Redis channel for the given room_id if not already subscribed.
          - we only subscribe once per room, even if multiple users join the same room.
+         - do the sub check rel. o/p inside lock to avoid double subscriptions race condition.
         """
         channel_name = f"room:{room_id}"
-        if channel_name not in self.subscribed_rooms:
-            await self.pubsub.subscribe(channel_name)
-            self.subscribed_rooms.add(channel_name)
+        async with lock:
+            if channel_name not in self.subscribed_rooms:
+                await self.pubsub.subscribe(channel_name)
+                self.subscribed_rooms.add(channel_name)
 
     async def unsubscribe(self, room_id: str):
         """
         Unsubscribe from a Redis channel for the given room_id.
          - we only unsubscribe when the last user leaves the room.
+         - do the unsub check rel. o/p inside lock to avoid double unsubscriptions race condition.
         """
         channel_name = f"room:{room_id}"
-        if channel_name in self.subscribed_rooms:
-            await self.pubsub.unsubscribe(channel_name)
-            self.subscribed_rooms.remove(channel_name)
+        async with lock:
+            if channel_name in self.subscribed_rooms:
+                await self.pubsub.unsubscribe(channel_name)
+                self.subscribed_rooms.remove(channel_name)
 
     async def subscriber_coroutine(self, ws_manager: "WebSocketConnectionManager"):
         """
@@ -71,7 +77,7 @@ class RedisPubSubManager:
                 if not self.subscribed_rooms:
                     await asyncio.sleep(1)
                     continue
-                
+
                 async for raw_message in self.pubsub.listen():
                     # skip subscribe/unsubscribe confirmations msges
                     if raw_message["type"] != "message":
@@ -82,28 +88,31 @@ class RedisPubSubManager:
 
                     # look up who is in this room on this server instance
                     # and send the message to their queues
-                    if room_id in ws_manager.active_connections:
-                        queues = list(
-                            ws_manager.active_connections[room_id]
-                        )  # make snapshot to avoid issues if the data changes while iterating
-                        try:
-                            payload = json.loads(raw_message["data"])
-                        except json.JSONDecodeError:
-                            print(
-                                f"Received invalid message from Redis: {raw_message['data']}"
-                            )
-                            continue
-                        for user_queue in queues:
-                            await user_queue.put(payload)
+                    # get the snapshot of current queues in the room for the current broadcast via a lock,
+                    # to avoid issues if the data changes while iterating
+                    queues = await ws_manager.get_room_queues(room_id)
+                    if not queues:
+                        continue
+
+                    try:
+                        payload = json.loads(raw_message["data"])
+                    except json.JSONDecodeError:
+                        print(
+                            f"Received invalid message from Redis: {raw_message['data']}"
+                        )
+                        continue
+                    for user_queue in queues:
+                        await user_queue.put(payload)
 
             except ConnectionError:
                 print("Redis connection lost. Reconnecting...")
                 await asyncio.sleep(2)  # back off before retrying
                 await self.connect()
 
-                # resub to all rooms
-                for room in self.subscribed_rooms:
-                    await self.pubsub.subscribe(room)
+                # resub to all rooms via a lock to avoid race conditions
+                async with lock:
+                    for room in self.subscribed_rooms:
+                        await self.pubsub.subscribe(room)
                 continue
             except asyncio.CancelledError:
                 raise

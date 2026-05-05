@@ -15,6 +15,10 @@ class WebSocketConnectionManager:
 
     async def register(self, websocket: WebSocket, queue: asyncio.Queue):
         self.ws_to_queue[websocket] = queue
+    
+    async def get_room_queues(self, room: str) -> list[asyncio.Queue]:
+        async with lock:
+            return list(self.active_connections.get(room, []))
 
     async def join_room(self, websocket: WebSocket, room: str) -> bool:
         should_subscribe = False
@@ -51,8 +55,8 @@ class WebSocketConnectionManager:
                 if not self.active_connections[room]:
                     del self.active_connections[room]
                     should_unsubscribe = True
-
-            return False  # not in room
+            else:
+                return False  # not in room
 
         if should_unsubscribe:
             await redis_manager.unsubscribe(room)

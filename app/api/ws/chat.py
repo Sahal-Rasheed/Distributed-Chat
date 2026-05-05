@@ -2,13 +2,7 @@ import asyncio
 from datetime import datetime, UTC
 
 from pydantic import ValidationError
-from fastapi import (
-    WebSocket,
-    WebSocketDisconnect,  # noqa
-    WebSocketException,  # noqa
-    APIRouter,
-    status,  # noqa
-)
+from fastapi import WebSocket, APIRouter
 
 from app.api.deps import CurrentWSUserDep
 from app.services.socket import ws_manager
@@ -34,10 +28,12 @@ async def websocket_endpoint(websocket: WebSocket, user: CurrentWSUserDep):
         try:
             while True:
                 await asyncio.sleep(30)  # ping every 30 seconds
-                await websocket.send_json({"type": "ping"})
-        except (WebSocketDisconnect, WebSocketException):
+                await queue.put({"type": "ping"})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
             pass
-            
+
     async def read_loop():
         """
         Read messages from the WebSocket & add them to the queue for processing.
@@ -106,8 +102,9 @@ async def websocket_endpoint(websocket: WebSocket, user: CurrentWSUserDep):
             while True:
                 msg = await queue.get()
                 await websocket.send_json(msg)
-        except Exception:
-            # connection closed or cancelled
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # connection closed or cancelled
             pass
 
     ping_task = asyncio.create_task(ping_loop())
